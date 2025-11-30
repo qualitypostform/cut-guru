@@ -1498,6 +1498,17 @@ TEMPLATE = """
         }
         pre { background: #f5f5f5; padding: 10px; border-radius: 5px; max-height: 400px; overflow:auto; }
         button { cursor: pointer; }
+
+                .rotate-yes {
+            background: #dfd !important;  /* light green */
+            border: 1px solid #8c8; 
+        }
+
+        .rotate-no {
+            background: #fdd !important;  /* light red */
+            border: 1px solid #c88;
+        }
+
     </style>
 </head>
 <body>
@@ -1848,8 +1859,10 @@ function importPartsList(ev) {
 function setAllRotate(v) {
     document.querySelectorAll('select[name="can_rotate"]').forEach(sel => {
         sel.value = v;
+        updateRotateColour(sel); // <-- NEW
     });
 }
+
 
 function toggleRotateAll() {
     const btn = document.getElementById('rotate-toggle-btn');
@@ -2053,7 +2066,31 @@ function printLayoutsTwoPerPage() {
 
 // =============== ENTER-BASED NAVIGATION + QTY DEFAULTS ===============
 
+
+function updateRotateColour(selectEl) {
+    if (!selectEl) return;
+    if (selectEl.value.toLowerCase() === "yes") {
+        selectEl.classList.add("rotate-yes");
+        selectEl.classList.remove("rotate-no");
+    } else {
+        selectEl.classList.add("rotate-no");
+        selectEl.classList.remove("rotate-yes");
+    }
+}
+
+document.addEventListener("change", function(e) {
+    if (e.target && e.target.name === "can_rotate") {
+        updateRotateColour(e.target);
+    }
+});
+
+
 document.addEventListener('DOMContentLoaded', function() {
+    // Colour all rotate selects on page load
+    document.querySelectorAll('select[name="can_rotate"]').forEach(sel => {
+        updateRotateColour(sel);
+    });
+
     // Make sure at least one parts row exists
     const partsBody = document.getElementById('parts-body');
     if (partsBody && partsBody.children.length === 0) {
