@@ -2239,38 +2239,75 @@ LOGIN_TEMPLATE = """
         }
         .card {
             background:white;
-            padding:20px 25px;
-            border-radius:8px;
+            padding:25px 30px;
+            border-radius:10px;
             box-shadow:0 2px 8px rgba(0,0,0,0.15);
-            min-width:260px;
+            min-width:280px;
+            text-align:center;
+        }
+        h2 {
+            margin-top:10px;
+            margin-bottom:20px;
         }
         input[type="password"] {
             width:100%;
-            padding:8px;
+            padding:10px;
             font-size:14px;
-            margin-top:8px;
+            margin-top:12px;
+            border:1px solid #ccc;
+            border-radius:6px;
         }
         button {
-            margin-top:12px;
-            padding:8px 14px;
+            margin-top:15px;
+            padding:10px 16px;
             font-size:14px;
             cursor:pointer;
+            background:#4CAF50;
+            color:white;
+            border:none;
+            border-radius:6px;
         }
         .error {
             color:#b00020;
             font-size:13px;
+            margin-top:10px;
+        }
+        .logo-group {
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            gap:20px;
+            margin-bottom:20px;
+        }
+        .logo-group img {
+            height:60px;
+            object-fit:contain;
+        }
+        .divider {
+            width:1px;
+            height:40px;
+            background:#ccc;
         }
     </style>
 </head>
 <body>
     <div class="card">
+
+        <div class="logo-group">
+            <img src="{{ url_for('static', filename='logo.jpg') }}" alt="QP Logo">
+            <div class="divider"></div>
+            <img src="{{ url_for('static', filename='cutguru_logo.png') }}" alt="CG Logo">
+        </div>
+
         <h2>Cut Guru Login</h2>
+
         <form method="post">
-            <label>Password:<br>
-                <input type="password" name="password" autofocus>
+            <label>
+                <input type="password" name="password" placeholder="Enter password" autofocus>
             </label><br>
             <button type="submit">Enter</button>
         </form>
+
         {% if error %}
             <div class="error">{{ error }}</div>
         {% endif %}
