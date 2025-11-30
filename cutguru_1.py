@@ -6,7 +6,13 @@
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from flask import Flask, request, render_template_string, url_for
+from flask import Flask, request, render_template_string, url_for, redirect, session
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
+import os
+from functools import wraps
+import os
+from functools import wraps
 
 # ============================================================
 #  DATA CLASSES
@@ -1459,6 +1465,17 @@ def generate_text_report(boards,
 
 app = Flask(__name__)
 
+# Secret key used for sessions (login cookie)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+
+# Password checker – reads APP_PASSWORD from environment
+def check_password(pwd: str) -> bool:
+    expected = os.environ.get("APP_PASSWORD", "")
+    if not expected:
+        # If no password is set, never let anyone in
+        return False
+    return pwd == expected
+
 TEMPLATE = """
 <!doctype html>
 <html>
@@ -2204,6 +2221,63 @@ document.addEventListener('DOMContentLoaded', function() {
 </body>
 </html>
 """
+LOGIN_TEMPLATE = """
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Cut Guru - Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            height:100vh;
+            margin:0;
+        }
+        .card {
+            background:white;
+            padding:20px 25px;
+            border-radius:8px;
+            box-shadow:0 2px 8px rgba(0,0,0,0.15);
+            min-width:260px;
+        }
+        input[type="password"] {
+            width:100%;
+            padding:8px;
+            font-size:14px;
+            margin-top:8px;
+        }
+        button {
+            margin-top:12px;
+            padding:8px 14px;
+            font-size:14px;
+            cursor:pointer;
+        }
+        .error {
+            color:#b00020;
+            font-size:13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Cut Guru Login</h2>
+        <form method="post">
+            <label>Password:<br>
+                <input type="password" name="password" autofocus>
+            </label><br>
+            <button type="submit">Enter</button>
+        </form>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
 # === CHUNK 6/7: END ===
 
@@ -2211,10 +2285,47 @@ document.addEventListener('DOMContentLoaded', function() {
 # === CHUNK 7/7: BEGIN ===
 
 # ============================================================
-#  ROUTE: INDEX
+#  AUTH HELPERS
+# ============================================================
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return wrapper
+
+
+# ============================================================
+#  ROUTES: LOGIN / LOGOUT
+# ============================================================
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        pwd = request.form.get("password", "")
+        if check_password(pwd):
+            session["logged_in"] = True
+            return redirect("/")
+        else:
+            error = "Invalid password"
+    return render_template_string(LOGIN_TEMPLATE, error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+# ============================================================
+#  ROUTE: INDEX (protected)
 # ============================================================
 
 @app.route("/", methods=["GET", "POST"])
+@login_required
 def index():
     # Default demo rows (you can change these)
     default_rows = [
@@ -2230,6 +2341,7 @@ def index():
             "quantity": "1",
         },
     ]
+    # ... keep the rest of your index() code exactly as it was ...
 
     ctx = {
         "board_length": 2850,
