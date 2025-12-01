@@ -1278,16 +1278,24 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
             )
 
             # Dimension strings with banding markers (#)
+            # NOTE:
+            #   - Horizontal side in the SVG has length p.height (we map board-length → SVG width)
+            #   - Vertical side in the SVG has length p.width  (we map board-width  → SVG height)
+            #
+            # So horiz_val must always be p.height, vert_val always p.width.
+            # Only the banding counts swap when the part is rotated.
+            horiz_val = p.height      # length of horizontal side in SVG
+            vert_val  = p.width       # length of vertical side in SVG
+
             if not p.rotated:
-                horiz_val = p.height
+                # Unrotated: board length aligns with part "length"
                 horiz_band = p.band_length_sides
-                vert_val  = p.width
-                vert_band = p.band_width_sides
+                vert_band  = p.band_width_sides
             else:
-                horiz_val = p.width
+                # Rotated: board length now aligns with part "width"
                 horiz_band = p.band_width_sides
-                vert_val  = p.height
-                vert_band = p.band_length_sides
+                vert_band  = p.band_length_sides
+
 
             len_str = f"{horiz_val:.0f}" + ("#" * horiz_band)
             wid_str = f"{vert_val:.0f}"  + ("#" * vert_band)
@@ -1594,7 +1602,22 @@ TEMPLATE = """
 
         <!-- Parts list -->
         <div class="card" style="flex: 3 1 600px;">
-            <h3>Parts list</h3>
+
+            <!-- Title + input units button on same row -->
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <h3 style="margin:0;">Parts list</h3>
+
+                <button
+                    type="button"
+                    id="unit-mode-btn"
+                    onclick="toggleInputUnits()"
+                    style="padding:10px 18px; font-size:14px; font-weight:bold; border-radius:6px;">
+                    Input set to mm
+                </button>
+
+
+            </div>
+
             <p>
                 One row per part. Leave blank rows unused.<br>
                 Name may be blank.<br>
@@ -1692,6 +1715,7 @@ TEMPLATE = """
                 </button>
             </div>
         </div>
+
 
     <button type="submit" style="padding:10px 20px; font-size:16px;">Calculate layout</button>
 </form>
@@ -1880,6 +1904,37 @@ function toggleRotateAll() {
         btn.style.background = "#dfd";   // light green
     }
 }
+
+// =============== INPUT UNIT MODE (mm <-> inches) ===============
+
+let inputUnitsMode = "mm";  // default
+
+function toggleInputUnits() {
+    const btn = document.getElementById('unit-mode-btn');
+    const orange = "#D68A4A";
+
+    if (inputUnitsMode === "mm") {
+        inputUnitsMode = "in";
+        if (btn) {
+            btn.textContent = "Input set to inches";
+            btn.style.background = orange;
+            btn.style.color = "white";
+            btn.style.border = "2px solid #b26d34";
+        }
+    } else {
+        inputUnitsMode = "mm";
+        if (btn) {
+            btn.textContent = "Input set to mm";
+            btn.style.background = "#eee";
+            btn.style.color = "black";
+            btn.style.border = "1px solid #ccc";
+        }
+    }
+}
+
+
+
+
 
 // =============== BOARD INVENTORY HELPERS ===============
 
@@ -2096,6 +2151,44 @@ document.addEventListener('DOMContentLoaded', function() {
     if (partsBody && partsBody.children.length === 0) {
         addRow();
     }
+
+        // Set initial label for input units button
+    const unitBtn = document.getElementById('unit-mode-btn');
+    if (unitBtn) {
+        unitBtn.textContent = "Input set to mm";
+        unitBtn.style.background = "";
+    }
+
+    // On form submit: if inputUnitsMode is inches, auto-append " to bare numeric dimensions
+    const form = document.querySelector('form');
+    if (form) {
+        form.addEventListener('submit', function() {
+            if (inputUnitsMode !== "in") return;
+
+            // These fields are treated as dimensions
+            const selectors = [
+                'input[name="final_length"]',
+                'input[name="final_width"]',
+                'input[name="inv_length"]',
+                'input[name="inv_width"]'
+            ];
+
+            selectors.forEach(sel => {
+                document.querySelectorAll(sel).forEach(inp => {
+                    let v = (inp.value || "").trim();
+                    if (!v) return;
+
+                    // If user already explicitly used inches or mm or letters, leave it alone
+                    if (v.endsWith('"')) return;
+                    if (/[a-zA-Z]/.test(v)) return;  // e.g. "600mm"
+
+                    // Otherwise, treat as inches input and append "
+                    inp.value = v + '"';
+                });
+            });
+        });
+    }
+
 
     // Set initial state of rotate toggle
     const rotateBtn = document.getElementById('rotate-toggle-btn');
