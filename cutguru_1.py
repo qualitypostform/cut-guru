@@ -1389,12 +1389,27 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                         if pp.board_index == b_index)
         yield_pct = 100 * used_area / board_area if board_area else 0
 
+        # Position of the yield label (bottom-right inside the board)
+        yield_x = ox + board_len_px - 4
+        yield_y = oy + board_wid_px - 4
+
+        # Yield text
         out.append(
-            f'<text x="{ox + board_len_px - 4:.1f}" '
-            f'y="{oy + board_wid_px - 4:.1f}" '
+            f'<text x="{yield_x:.1f}" '
+            f'y="{yield_y:.1f}" '
             f'font-size="{FS_YIELD}" text-anchor="end" fill="black">'
             f'Yield: {yield_pct:.1f}%</text>'
         )
+
+        # Tagline just below the board, under the yield label
+        tagline_y = yield_y + FS_YIELD + 4
+        out.append(
+            f'<text x="{yield_x:.1f}" '
+            f'y="{tagline_y:.1f}" '
+            f'font-size="{FS_YIELD}" text-anchor="end" fill="black">'
+            f'Cut Guru by Quality Postform</text>'
+        )
+
 
         out.append("</svg>")
         all_svgs.append("\n".join(out))
