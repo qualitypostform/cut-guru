@@ -1317,6 +1317,7 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
             )
 
             # Name label (bottom-right)
+           
             if p.name:
                 raw = p.name
                 if "_" in raw:
@@ -1335,15 +1336,18 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                 lx = x + w - 4
                 ly = y + h - 4
 
-            # Icons (grain or non-rotatable)
+            # Icons / grain group labels
             icon_x = lx - 18
             icon_y = ly - 2 * FS_TEXT + 4
 
             if p.grain_group:
+                # Show grain-group name next to the grain symbol, nudged left
+                group_label = p.grain_group
                 out.append(
-                    f'<text x="{icon_x:.1f}" y="{icon_y + FS_TEXT:.1f}" '
-                    f'font-size="{FS_TEXT}" text-anchor="start" fill="black">≈</text>'
+                    f'<text x="{icon_x - 19:.1f}" y="{icon_y + FS_TEXT:.1f}" '
+                    f'font-size="{FS_TEXT}" text-anchor="start" fill="black">≈ {group_label}</text>'
                 )
+
             elif not p.can_rotate:
                 out.append(
                     f'''
@@ -1357,6 +1361,7 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                     </g>
                     '''
                 )
+
 
         # --- OFFCUT LABELS ---
         for fr in merged_offcuts:
