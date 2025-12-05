@@ -13,6 +13,8 @@ import os
 from functools import wraps
 import os
 from functools import wraps
+from datetime import datetime
+
 
 # ============================================================
 #  DATA CLASSES
@@ -1154,6 +1156,10 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
     longest board length so they are comparable.
     """
 
+    # Timestamp for printout
+    from datetime import datetime
+    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
     padding = 40
     max_board_length_px = 800.0  # horizontal space for LENGTH
 
@@ -1410,9 +1416,21 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
             f'Cut Guru by Quality Postform</text>'
         )
 
+        # --- DATE/TIME STAMP (same line as tagline, left side) ---
+        stamp_x = ox
+        stamp_y = tagline_y
+
+        out.append(
+            f'<text x="{stamp_x:.1f}" '
+            f'y="{stamp_y:.1f}" '
+            f'font-size="{FS_YIELD}" text-anchor="start" fill="black">'
+            f'Printed: {timestamp_str}</text>'
+        )
+
 
         out.append("</svg>")
         all_svgs.append("\n".join(out))
+
 
     return "\n".join(all_svgs)
 
@@ -1527,10 +1545,27 @@ TEMPLATE = """
         pre { background: #f5f5f5; padding: 10px; border-radius: 5px; max-height: 400px; overflow:auto; }
         button { cursor: pointer; }
 
-                .rotate-yes {
+        .cutlist-btn {
+            width: 150px;                 /* exact width */
+            display: inline-flex;         /* make button + label render identically */
+            justify-content: center;      /* center text horizontally */
+            align-items: center;          /* center text vertically */
+            padding: 6px 0;               /* even padding */
+            font-size: 14px;
+            background: #eee;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            cursor: pointer;
+            box-sizing: border-box;       /* ensures exact size */
+        }
+
+
+
+        .rotate-yes {
             background: #dfd !important;  /* light green */
             border: 1px solid #8c8; 
         }
+
 
         .rotate-no {
             background: #fdd !important;  /* light red */
@@ -1699,32 +1734,14 @@ TEMPLATE = """
 
             <br>
 
+        <!-- FIRST ROW: Clear + Rotate -->
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+
+            <!-- LEFT SIDE -->
             <button type="button" onclick="clearAllParts()" style="background:#fdd;">Clear all</button>
-            <button type="button" onclick="exportPartsList()">Export (JSON)</button>
 
-            <input
-                type="file"
-                id="parts-file-input"
-                accept=".json"
-                onchange="importPartsList(event)"
-                style="margin-left:10px;"
-            >
-
-            <!-- Hidden field: posted back to Flask so SVG can show the file name -->
-            <input
-                type="hidden"
-                id="parts-file-name-hidden"
-                name="parts_file_name"
-                value="{{ parts_file_name or '' }}"
-            >
-
-            <!-- Visible file name next to Choose file -->
-            <span id="parts-file-name-label"
-                  style="margin-left:10px; font-size:12px; color:#333;">
-                {{ parts_file_name or '' }}
-            </span>
-
-            <div style="margin-top:4px;">
+            <!-- RIGHT SIDE -->
+            <div style="display:flex; align-items:center; gap:10px;">
                 <span>Rotate all:</span>
                 <button
                     type="button"
@@ -1734,7 +1751,52 @@ TEMPLATE = """
                     Rotate: ON
                 </button>
             </div>
+
         </div>
+
+            <!-- SECOND ROW: Save + Load -->
+            <div style="display:flex; align-items:center; gap:20px; margin-bottom:10px;">
+
+                <!-- Save cutlist -->
+                <button type="button" onclick="exportPartsList()" class="cutlist-btn">
+                    Save cutlist
+                </button>
+
+                <!-- Load cutlist -->
+                <label for="parts-file-input"
+                       class="cutlist-btn"
+                       style="cursor:pointer; text-align:center;">
+                    Load cutlist
+                </label>
+
+                <input
+                    type="file"
+                    id="parts-file-input"
+                    accept=".json"
+                    onchange="importPartsList(event)"
+                    style="display:none;"
+                >
+
+                <!-- ✅ NOW inside the flex row -->
+                <span id="parts-file-name-label"
+                      style="font-size:12px; color:#333;">
+                    {{ parts_file_name or '' }}
+                </span>
+
+            </div>
+
+            <!-- hidden field stays where it was -->
+            <input
+                type="hidden"
+                id="parts-file-name-hidden"
+                name="parts_file_name"
+                value="{{ parts_file_name or '' }}"
+            >
+
+
+
+        </div>  <!-- close Parts list .card -->
+    </div>      <!-- close .row -->
 
 
     <button type="submit" style="padding:10px 20px; font-size:16px;">Calculate layout</button>
