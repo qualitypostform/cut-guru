@@ -4,6 +4,8 @@
 # CHUNK 1/7: Imports, Data Classes, Kerf Helpers
 # ---------------------------------------------------------------
 
+from datetime import datetime
+import pytz
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from flask import Flask, request, render_template_string, url_for, redirect, session
@@ -1158,7 +1160,10 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
 
     # Timestamp for printout
     from datetime import datetime
-    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    import pytz
+    cet = pytz.timezone("Europe/Berlin")
+    timestamp = datetime.now(cet).strftime("%Y-%m-%d %H:%M")
+
 
     padding = 40
     max_board_length_px = 800.0  # horizontal space for LENGTH
