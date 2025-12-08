@@ -1162,7 +1162,8 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
     from datetime import datetime
     import pytz
     cet = pytz.timezone("Europe/Berlin")
-    timestamp = datetime.now(cet).strftime("%Y-%m-%d %H:%M")
+    timestamp_str = datetime.now(cet).strftime("%Y-%m-%d %H:%M")
+
 
 
     padding = 40
