@@ -44,6 +44,9 @@ class Part:
     grain_group: Optional[str] = None
     grain_order: int = 0
 
+    # NEW
+    has_hinge_holes: bool = False
+
 
 @dataclass
 class PlacedPart:
@@ -66,6 +69,10 @@ class PlacedPart:
     can_rotate: bool
     grain_group: Optional[str]
     grain_order: int
+
+    # NEW
+    has_hinge_holes: bool = False
+
 
 
 @dataclass
@@ -390,10 +397,12 @@ def expand_parts(parts):
                     band_length_sides=p.band_length_sides,
                     can_rotate=p.can_rotate,
                     grain_group=p.grain_group,
-                    grain_order=p.grain_order
+                    grain_order=p.grain_order,
+                    has_hinge_holes=p.has_hinge_holes,  # NEW
                 )
             )
     return out
+
 
 
 def place_composite(maxr: MaxRects, comp: GrainComposite,
@@ -439,7 +448,6 @@ def place_normal_part(maxr: MaxRects, part: Part,
                       layout: BoardLayout) -> bool:
 
     w_exp, h_exp = kerf_expand(part.width, part.height, kerf)
-
     pos = maxr.insert(w_exp, h_exp, allow_rotate=part.can_rotate)
     if pos is None:
         return False
@@ -466,11 +474,13 @@ def place_normal_part(maxr: MaxRects, part: Part,
             band_length_sides=part.band_length_sides,
             can_rotate=part.can_rotate,
             grain_group=part.grain_group,
-            grain_order=part.grain_order
+            grain_order=part.grain_order,
+            has_hinge_holes=part.has_hinge_holes,  # NEW
         )
     )
 
     return True
+
 
 # === CHUNK 2/7: END ===
 
@@ -906,7 +916,10 @@ def parse_parts_from_form(form, edge_thickness):
         ordv = orders[i]if i < len(orders)else "0"
         qty  = qtys[i]  if i < len(qtys)  else "1"
 
-        # Always preserve user-entered rows
+        # NEW — hinge hole checkbox value
+        hinge_val = form.get(f"hinge_holes_{i}", "0")
+        has_hinge = (hinge_val == "1")
+
         row_out = {
             "name": name,
             "final_length": L,
@@ -916,40 +929,26 @@ def parse_parts_from_form(form, edge_thickness):
             "can_rotate": rot,
             "grain_group": grp,
             "grain_order": ordv,
-            "quantity": qty
+            "quantity": qty,
+            "hinge_holes": has_hinge,   # NEW
         }
         rows_out.append(row_out)
 
-        # Skip fully blank rows
         if not name and not L and not W:
             continue
 
         try:
             Lmm = parse_dimension_mm(L)
             Wmm = parse_dimension_mm(W)
-            # Allow quantity = 0, treat negative as error
             qty_i = int(qty or "0")
-            if qty_i < 0:
-                raise ValueError("Quantity cannot be negative.")
-
             bl_i = int(bl or "0")
             bw_i = int(bw or "0")
             rot_b = parse_bool(rot)
             grp_v = grp if grp.strip() else None
             ord_i = int(ordv or "0")
 
-            # Compute cut-sizes after banding
-            #
-            # band_len  = edges parallel to the LENGTH of the piece
-            #            -> reduces the WIDTH
-            # band_wid  = edges parallel to the WIDTH of the piece
-            #            -> reduces the LENGTH
-            #
-            cut_len = Lmm - edge_thickness * bw_i  # band_wid reduces length
-            cut_wid = Wmm - edge_thickness * bl_i  # band_len reduces width
-
-            if cut_len <= 0 or cut_wid <= 0:
-                raise ValueError("Cut size <= 0 (banding too large).")
+            cut_len = Lmm - edge_thickness * bw_i
+            cut_wid = Wmm - edge_thickness * bl_i
 
             parts.append(
                 Part(
@@ -963,12 +962,14 @@ def parse_parts_from_form(form, edge_thickness):
                     band_length_sides=bl_i,
                     can_rotate=rot_b,
                     grain_group=grp_v,
-                    grain_order=ord_i
+                    grain_order=ord_i,
+                    has_hinge_holes=has_hinge,  # NEW
                 )
             )
 
         except Exception as e:
             errors.append(f"Row {i+1} ({name or 'unnamed'}): {e}")
+
 
     return parts, errors, rows_out
 
@@ -1328,6 +1329,16 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                 f'font-size="{FS_TEXT}" text-anchor="start" fill="black">{wid_str}</text>'
             )
 
+            # NEW — hinge holes flag label (centered)
+            if getattr(p, "has_hinge_holes", False):
+                hx = x + w / 2
+                hy = y + h / 2 + FS_TEXT / 2
+                out.append(
+                    f'<text x="{hx:.1f}" y="{hy:.1f}" '
+                    f'font-size="{FS_TEXT}" text-anchor="middle" fill="black">Hinge holes</text>'
+                )
+
+
             # Name label (bottom-right)
            
             if p.name:
@@ -1459,6 +1470,8 @@ def generate_text_report(boards,
 
     all_parts = [p for b in boards for p in b.parts]
     total_pieces = len(all_parts)
+    hinge_parts = sum(1 for p in all_parts if getattr(p, "has_hinge_holes", False))
+
 
     # Banding length
     overhang = 80.0
@@ -1485,6 +1498,7 @@ def generate_text_report(boards,
     lines.append(f"<strong>Boards used          : {len(boards)}</strong>")
     lines.append(f"<strong>Total pieces         : {total_pieces}</strong>")
     lines.append(f"<strong>Total banding length : {band_len_meters:.2f} m</strong>")
+    lines.append(f"<strong>Hinge hole parts     : {hinge_parts}</strong>")
     lines.append("")
 
     # ----------------------------------------------------
@@ -1687,19 +1701,21 @@ TEMPLATE = """
             </p>
 
             <table id="parts-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Final length</th>
-                        <th>Band len<br>(0/1/2)</th>
-                        <th>Final width</th>
-                        <th>Band wid<br>(0/1/2)</th>
-                        <th>Qty</th>
-                        <th>Can rotate</th>
-                        <th>Grain group</th>
-                        <th>Grain order</th>
-                    </tr>
-                </thead>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Final length</th>
+                            <th>Band len<br>(0/1/2)</th>
+                            <th>Final width</th>
+                            <th>Band wid<br>(0/1/2)</th>
+                            <th>Qty</th>
+                            <th>Can rotate</th>
+                            <th>Hinge holes</th>
+                            <th>Grain group</th>
+                            <th>Grain order</th>
+                        </tr>
+                    </thead>
+
                 <tbody id="parts-body">
                     {% for row in parts_rows %}
                     <tr>
@@ -1727,6 +1743,18 @@ TEMPLATE = """
                                 <option value="no"  {% if row.can_rotate|lower in ['','no','false','0'] %}selected{% endif %}>No</option>
                             </select>
                         </td>
+
+                        <!-- NEW HINGE HOLES COLUMN -->
+                        <td>
+                            <input type="checkbox"
+                                   name="hinge_holes_{{ loop.index0 }}"
+                                   value="1"
+                                   {% if row.hinge_holes %}checked{% endif %}>
+                            <input type="hidden"
+                                   name="hinge_holes_{{ loop.index0 }}"
+                                   value="0">
+                        </td>
+
                         <td>
                             <input type="text" name="grain_group" value="{{ row.grain_group }}">
                         </td>
@@ -1734,6 +1762,7 @@ TEMPLATE = """
                             <input type="number" name="grain_order" value="{{ row.grain_order or '0' }}">
                         </td>
                     </tr>
+
                     {% endfor %}
                 </tbody>
             </table>
@@ -1846,6 +1875,7 @@ TEMPLATE = """
 // Create a new empty parts row (Qty default 0; changes to 1 on focus)
 function addRow() {
     const tbody = document.getElementById('parts-body');
+    const index = tbody.children.length;   // 0-based index for this row
     const tr = document.createElement('tr');
 
     tr.innerHTML =
@@ -1859,12 +1889,19 @@ function addRow() {
             '<option value="yes">Yes</option>' +
             '<option value="no" selected>No</option>' +
         '</select></td>' +
+        // Hinge holes column: checkbox + hidden, same naming scheme as template
+        '<td style="text-align:center;">' +
+            '<input type="checkbox" name="hinge_holes_' + index + '" value="1">' +
+            '<input type="hidden"  name="hinge_holes_' + index + '" value="0">' +
+        '</td>' +
         '<td><input type="text" name="grain_group"></td>' +
         '<td><input type="number" name="grain_order" value="0"></td>';
 
     tbody.appendChild(tr);
     return tr;
 }
+
+
 
 // Clear all parts and leave ONE empty row, focus Final length
 function clearAllParts() {
