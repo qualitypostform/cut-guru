@@ -435,12 +435,15 @@ def place_composite(maxr: MaxRects, comp: GrainComposite,
                 band_length_sides=child.band_length_sides,
                 can_rotate=child.can_rotate,
                 grain_group=child.grain_group,
-                grain_order=child.grain_order
+                grain_order=child.grain_order,
+                # 🔴 ADD THIS LINE
+                has_hinge_holes=child.has_hinge_holes,
             )
         )
         curr_y += child.height + kerf  # spacing from composite expansion
 
     return True
+
 
 
 def place_normal_part(maxr: MaxRects, part: Part,
@@ -1329,13 +1332,14 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                 f'font-size="{FS_TEXT}" text-anchor="start" fill="black">{wid_str}</text>'
             )
 
-            # NEW — hinge holes flag label (centered)
+            # NEW — hinge holes symbol (centered)
             if getattr(p, "has_hinge_holes", False):
+                hinge_symbol = "⬤_⬤"   # the symbol you requested
                 hx = x + w / 2
                 hy = y + h / 2 + FS_TEXT / 2
                 out.append(
                     f'<text x="{hx:.1f}" y="{hy:.1f}" '
-                    f'font-size="{FS_TEXT}" text-anchor="middle" fill="black">Hinge holes</text>'
+                    f'font-size="{FS_TEXT}" text-anchor="middle" fill="black">{hinge_symbol}</text>'
                 )
 
 
@@ -1364,26 +1368,15 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
             icon_y = ly - 2 * FS_TEXT + 4
 
             if p.grain_group:
-                # Show grain-group name next to the grain symbol, nudged left
+                # Show grain-group name, nudged left
                 group_label = p.grain_group
                 out.append(
                     f'<text x="{icon_x - 19:.1f}" y="{icon_y + FS_TEXT:.1f}" '
                     f'font-size="{FS_TEXT}" text-anchor="start" fill="black">≈ {group_label}</text>'
                 )
 
-            elif not p.can_rotate:
-                out.append(
-                    f'''
-                    <g transform="translate({icon_x:.1f},{icon_y:.1f}) scale(0.8)">
-                        <rect x="0" y="0" width="12" height="12"
-                              fill="none" stroke="black" stroke-width="1.3"/>
-                        <line x1="0" y1="0" x2="12" y2="12"
-                              stroke="black" stroke-width="1.3"/>
-                        <line x1="12" y1="0" x2="0" y2="12"
-                              stroke="black" stroke-width="1.3"/>
-                    </g>
-                    '''
-                )
+            # NOTE: we intentionally do NOT draw anything for non-rotating parts now.
+
 
 
         # --- OFFCUT LABELS ---
