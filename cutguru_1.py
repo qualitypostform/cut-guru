@@ -46,6 +46,9 @@ class Part:
 
     # NEW
     has_hinge_holes: bool = False
+    hinge_edge: str = "vertical"   # "vertical" or "top"
+
+
 
 
 @dataclass
@@ -72,6 +75,8 @@ class PlacedPart:
 
     # NEW
     has_hinge_holes: bool = False
+    hinge_edge: str = "vertical"   # "vertical" or "top"
+
 
 
 
@@ -163,56 +168,64 @@ class MaxRects:
     # ------------------------------------------------------------
     # Split one free rectangle around a placed block
     # ------------------------------------------------------------
-    def split_free_rect(self, fr: FreeRect, x: float, y: float,
-                        w: float, h: float):
+    def split_free_rect(self, fr: FreeRect, x: float, y: float, w: float, h: float):
         """
-        Split rectangle 'fr' around placed block at (x,y,w,h).
-        Produces up to 4 new rectangles.
+        Guillotine split with a strong preference for LONG offcuts along board LENGTH.
 
-        All new rectangles are guaranteed non-overlapping.
+        Because we always place at the top-left of the chosen free rect (x==fr.x, y==fr.y),
+        we can do a clean "vertical-first" split:
+
+          1) Right remainder keeps FULL height (this preserves long grain-friendly strips)
+          2) Bottom-left remainder under the placed part
+
+        If placement is ever not top-left, fall back to the old 4-way split.
         """
+
+        # ---- If not top-left placement, fall back to old behaviour ----
+        if x != fr.x or y != fr.y:
+            new_rects = []
+
+            fr_right = fr.x + fr.width
+            fr_bottom = fr.y + fr.height
+            block_right = x + w
+            block_bottom = y + h
+
+            if y > fr.y:
+                new_rects.append(FreeRect(fr.x, fr.y, fr.width, y - fr.y))
+
+            if block_bottom < fr_bottom:
+                new_rects.append(FreeRect(fr.x, block_bottom, fr.width, fr_bottom - block_bottom))
+
+            overlap_top = max(fr.y, y)
+            overlap_bottom = min(fr_bottom, block_bottom)
+
+            if overlap_bottom > overlap_top:
+                if x > fr.x:
+                    new_rects.append(FreeRect(fr.x, overlap_top, x - fr.x, overlap_bottom - overlap_top))
+
+                if block_right < fr_right:
+                    new_rects.append(FreeRect(block_right, overlap_top, fr_right - block_right, overlap_bottom - overlap_top))
+
+            return new_rects
+
+        # ---- TOP-LEFT placement: prefer VERTICAL-FIRST split ----
         new_rects = []
 
-        fr_right = fr.x + fr.width
-        fr_bottom = fr.y + fr.height
-        block_right = x + w
-        block_bottom = y + h
+        right_w = fr.width - w
+        bottom_h = fr.height - h
 
-        # Top segment
-        if y > fr.y:
-            new_rects.append(
-                FreeRect(fr.x, fr.y, fr.width, y - fr.y)
-            )
+        # 1) Right remainder: FULL height (this is the important one)
+        if right_w > 0:
+            new_rects.append(FreeRect(fr.x + w, fr.y, right_w, fr.height))
 
-        # Bottom segment
-        if block_bottom < fr_bottom:
-            new_rects.append(
-                FreeRect(fr.x, block_bottom,
-                         fr.width, fr_bottom - block_bottom)
-            )
-
-        # Overlap zone vertically
-        overlap_top = max(fr.y, y)
-        overlap_bottom = min(fr_bottom, block_bottom)
-
-        if overlap_bottom > overlap_top:
-            # Left strip
-            if x > fr.x:
-                new_rects.append(
-                    FreeRect(fr.x, overlap_top,
-                             x - fr.x,
-                             overlap_bottom - overlap_top)
-                )
-
-            # Right strip
-            if block_right < fr_right:
-                new_rects.append(
-                    FreeRect(block_right, overlap_top,
-                             fr_right - block_right,
-                             overlap_bottom - overlap_top)
-                )
+        # 2) Bottom remainder under the placed part (only the placed width)
+        if bottom_h > 0:
+            new_rects.append(FreeRect(fr.x, fr.y + h, w, bottom_h))
 
         return new_rects
+
+
+
 
     # ------------------------------------------------------------
     # Remove rectangles contained in others
@@ -302,6 +315,11 @@ class MaxRects:
     def insert(self, w: float, h: float, allow_rotate: bool) -> Optional[Tuple[float,float,bool]]:
         """
         Returns (x, y, rotated) or None.
+
+        Grain-friendly bias:
+          - Prefer placements that MINIMISE leftover along board LENGTH first.
+          - This encourages long horizontal “bands” (left→right cuts) instead of
+            tall vertical strips (top→bottom cuts).
         """
         best_score = None
         best_pos = None
@@ -317,20 +335,39 @@ class MaxRects:
 
             for idx, fr in enumerate(self.free_rects):
                 if rw <= fr.width and rh <= fr.height:
-                    leftover_w = fr.width - rw
-                    leftover_h = fr.height - rh
-                    short_side = min(leftover_w, leftover_h)
+                    leftover_w = fr.width  - rw   # leftover across board WIDTH
+                    leftover_h = fr.height - rh   # leftover along board LENGTH
 
-                    if best_score is None or short_side < best_score:
-                        best_score = short_side
+                    # Strong bias:
+                    # 1) avoid skinny leftovers across WIDTH (bad offcuts)
+                    # 2) then prefer keeping leftover long along LENGTH
+                    # 3) then stable tie-breakers
+                    skinny_penalty = 0 if leftover_w >= 120 else 1   # 120mm threshold (tweak as you like)
+
+                    short_side = min(leftover_w, leftover_h)
+                    long_side  = max(leftover_w, leftover_h)
+
+                    score = (
+                        short_side,        # pack efficiency first
+                        long_side,         # then next best fit
+                        skinny_penalty,    # only then avoid skinny strips
+                        -leftover_h,       # *last* tie-break: prefer long offcuts
+                        fr.y, fr.x
+                    )
+
+
+
+                    if best_score is None or score < best_score:
+                        best_score = score
                         best_pos = (fr.x, fr.y)
                         best_index = idx
                         best_rot = try_rot
 
+
+
         if best_pos is None:
             return None
 
-        # Split the free rect
         fr = self.free_rects.pop(best_index)
         x, y = best_pos
 
@@ -342,10 +379,10 @@ class MaxRects:
 
         self.free_rects.extend(new_rects)
         self.prune()
-        self.merge_adjacent()  # <--- NEW: merge side-by-side and stacked free spaces
-
+        self.merge_adjacent()  
 
         return (x, y, best_rot)
+
 
 
 # ============================================================
@@ -360,14 +397,16 @@ class GrainComposite:
     grain_group: str
 
 
-def make_grain_composite(parts: List[Part]) -> GrainComposite:
+def make_grain_composite(parts: List[Part], kerf: float) -> GrainComposite:
     """
-    Grain groups become tall vertical composites that cannot rotate.
+    Grain groups become TALL vertical composites that cannot rotate.
+    Parts are locked together end-to-end along LENGTH (p.height).
     """
     parts_sorted = sorted(parts, key=lambda p: p.grain_order)
-    total_h = sum(p.height for p in parts_sorted)
-    max_w = max(p.width for p in parts_sorted)
-    gname = parts_sorted[0].grain_group
+
+    total_h = sum(p.height for p in parts_sorted) + kerf * (len(parts_sorted) - 1)
+    max_w   = max(p.width for p in parts_sorted)
+    gname   = parts_sorted[0].grain_group
 
     return GrainComposite(
         width=max_w,
@@ -375,6 +414,9 @@ def make_grain_composite(parts: List[Part]) -> GrainComposite:
         subparts=parts_sorted,
         grain_group=gname
     )
+
+
+
 
 
 # ============================================================
@@ -399,6 +441,7 @@ def expand_parts(parts):
                     grain_group=p.grain_group,
                     grain_order=p.grain_order,
                     has_hinge_holes=p.has_hinge_holes,  # NEW
+                    hinge_edge=p.hinge_edge,
                 )
             )
     return out
@@ -418,13 +461,14 @@ def place_composite(maxr: MaxRects, comp: GrainComposite,
 
     curr_y = y
     for child in comp.subparts:
-        cx = x + (comp.width - child.width)/2
+        # center child across the composite WIDTH
+        cx = x + (comp.width - child.width) / 2
         cy = curr_y
+
         layout.parts.append(
             PlacedPart(
                 name=child.name,
-                x=cx,
-                y=cy,
+                x=cx, y=cy,
                 width=child.width,
                 height=child.height,
                 rotated=False,
@@ -436,13 +480,16 @@ def place_composite(maxr: MaxRects, comp: GrainComposite,
                 can_rotate=child.can_rotate,
                 grain_group=child.grain_group,
                 grain_order=child.grain_order,
-                # 🔴 ADD THIS LINE
                 has_hinge_holes=child.has_hinge_holes,
+                hinge_edge=child.hinge_edge,
             )
         )
-        curr_y += child.height + kerf  # spacing from composite expansion
+
+        curr_y += child.height + kerf
 
     return True
+
+
 
 
 
@@ -479,6 +526,7 @@ def place_normal_part(maxr: MaxRects, part: Part,
             grain_group=part.grain_group,
             grain_order=part.grain_order,
             has_hinge_holes=part.has_hinge_holes,  # NEW
+            hinge_edge=part.hinge_edge,
         )
     )
 
@@ -533,7 +581,7 @@ def nest_with_maxrects(board_w: float,
         else:
             normals.append(p)
 
-    composites = [make_grain_composite(v) for v in grain_map.values()]
+    composites = [make_grain_composite(v, kerf) for v in grain_map.values()]    
 
     # Unified list of items (composites first for better packing)
     items = composites + normals
@@ -630,15 +678,36 @@ def best_layout_global(board_length: float,
             shuffle_mode=mode,
         )
 
+
         # squeeze onto earlier boards if possible
         boards = second_pass_optimiser(boards, kerf)
+        
+        # ✅ IMPORTANT: sync free rects after second-pass moves
+        for b in boards:
+            b.free_rects = b._maxr.free_rects
 
-        metric = (len(boards), waste_area)
+        offcut = long_offcut_score(boards)
+        metric = (len(boards), waste_area, -offcut)
+        
+
+        # refresh free rects after second pass
+        for b in boards:
+            b.free_rects = b._maxr.free_rects
+
+        offcut = long_offcut_score(boards)
+
+        metric = (
+            len(boards),
+            waste_area,
+            -offcut
+        )
+
         if best_metric is None or metric < best_metric:
             best_metric = metric
             best_boards = boards
             best_used = used_area
             best_waste = waste_area
+
 
     return best_boards, best_used, best_waste
 
@@ -673,7 +742,7 @@ def nest_with_inventory(board_stock: List[BoardStock],
         else:
             normals.append(p)
 
-    composites = [make_grain_composite(v) for v in grain_map.values()]
+    composites = [make_grain_composite(v, kerf) for v in grain_map.values()]
 
     # Unified list of items (composites first for better packing)
     items = composites + normals
@@ -725,6 +794,16 @@ def nest_with_inventory(board_stock: List[BoardStock],
 #  SECOND PASS OPTIMISER
 # ============================================================
 
+def long_offcut_score(boards: List[BoardLayout]) -> float:
+    best = 0.0
+    for b in boards:
+        rects = getattr(b, "_maxr", None).free_rects if hasattr(b, "_maxr") else b.free_rects
+        for fr in rects:
+            best = max(best, fr.height)  # height = board LENGTH in your setup
+    return best
+
+
+
 def second_pass_optimiser(boards: List[BoardLayout], kerf: float):
     if len(boards) <= 1:
         return boards
@@ -750,7 +829,10 @@ def second_pass_optimiser(boards: List[BoardLayout], kerf: float):
                 final_width=part.final_width,
                 final_length=part.final_length,
                 band_width_sides=part.band_width_sides,
-                band_length_sides=part.band_length_sides
+                band_length_sides=part.band_length_sides,
+                has_hinge_holes=part.has_hinge_holes,
+                hinge_edge=part.hinge_edge,
+
             )
 
             for bi in range(last_idx):
@@ -780,9 +862,12 @@ def second_pass_optimiser(boards: List[BoardLayout], kerf: float):
                         band_length_sides=part.band_length_sides,
                         can_rotate=part.can_rotate,
                         grain_group=None,
-                        grain_order=0
+                        grain_order=0,
+                        has_hinge_holes=part.has_hinge_holes,   # ✅ ADD
+                        hinge_edge=part.hinge_edge,             # ✅ ADD
                     )
                 )
+
 
                 # Remove from final board
                 last.parts.remove(part)
@@ -901,6 +986,7 @@ def parse_parts_from_form(form, edge_thickness):
     groups= form.getlist("grain_group")
     orders= form.getlist("grain_order")
     qtys  = form.getlist("quantity")
+    hinge_edges = form.getlist("hinge_edge")
 
     rows_out = []
     parts = []
@@ -915,11 +1001,17 @@ def parse_parts_from_form(form, edge_thickness):
         bl   = bls[i]   if i < len(bls)   else "0"
         bw   = bws[i]   if i < len(bws)   else "0"
         rot  = rots[i]  if i < len(rots)  else "yes"
-        grp  = groups[i]if i < len(groups)else ""
-        ordv = orders[i]if i < len(orders)else "0"
+        grp  = groups[i] if i < len(groups) else ""
+        ordv = orders[i] if i < len(orders) else "0"
         qty  = qtys[i]  if i < len(qtys)  else "1"
 
-        # NEW — hinge hole checkbox value
+        # ✅ hinge edge per-row (default vertical)
+        hinge_edge = hinge_edges[i] if i < len(hinge_edges) else "vertical"
+        hinge_edge = (hinge_edge or "vertical").strip().lower()
+        if hinge_edge not in ("vertical", "top"):
+            hinge_edge = "vertical"
+
+        # Hinge hole checkbox
         hinge_val = form.get(f"hinge_holes_{i}", "0")
         has_hinge = (hinge_val == "1")
 
@@ -933,7 +1025,8 @@ def parse_parts_from_form(form, edge_thickness):
             "grain_group": grp,
             "grain_order": ordv,
             "quantity": qty,
-            "hinge_holes": has_hinge,   # NEW
+            "hinge_holes": has_hinge,
+            "hinge_edge": hinge_edge,
         }
         rows_out.append(row_out)
 
@@ -947,7 +1040,7 @@ def parse_parts_from_form(form, edge_thickness):
             bl_i = int(bl or "0")
             bw_i = int(bw or "0")
             rot_b = parse_bool(rot)
-            grp_v = grp if grp.strip() else None
+            grp_v = grp.strip() or None
             ord_i = int(ordv or "0")
 
             cut_len = Lmm - edge_thickness * bw_i
@@ -966,13 +1059,13 @@ def parse_parts_from_form(form, edge_thickness):
                     can_rotate=rot_b,
                     grain_group=grp_v,
                     grain_order=ord_i,
-                    has_hinge_holes=has_hinge,  # NEW
+                    has_hinge_holes=has_hinge,
+                    hinge_edge=hinge_edge,
                 )
             )
 
         except Exception as e:
             errors.append(f"Row {i+1} ({name or 'unnamed'}): {e}")
-
 
     return parts, errors, rows_out
 
@@ -1332,15 +1425,71 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
                 f'font-size="{FS_TEXT}" text-anchor="start" fill="black">{wid_str}</text>'
             )
 
-            # NEW — hinge holes symbol (centered)
-            if getattr(p, "has_hinge_holes", False):
-                hinge_symbol = "⬤_⬤"   # the symbol you requested
-                hx = x + w / 2
-                hy = y + h / 2 + FS_TEXT / 2
-                out.append(
-                    f'<text x="{hx:.1f}" y="{hy:.1f}" '
-                    f'font-size="{FS_TEXT}" text-anchor="middle" fill="black">{hinge_symbol}</text>'
-                )
+            # --- HINGE MARK (bold), snapped away from dimension text ---
+           
+            if getattr(p, "has_hinge_holes", False) and (p.band_width_sides == 2 and p.band_length_sides == 2):
+
+                hinge_edge = (getattr(p, "hinge_edge", "vertical") or "vertical").strip().lower()
+                if hinge_edge not in ("vertical", "top"):
+                    hinge_edge = "vertical"
+
+                # User requirement:
+                #   Vertical => symbol on LENGTH side of the piece
+                #   Top      => symbol on WIDTH side of the piece
+                place_on_length_side = (hinge_edge == "vertical")
+
+                # ---- BOLD styling ----
+                hole_r   = 2.8
+                hole_gap = 10.0
+                stroke_w = 1.8
+
+                if place_on_length_side:
+                    # LENGTH side -> keep horizontal dumbbell
+                    hx = x + w * 0.85
+                    hy = y + (FS_TEXT * 2.2)
+
+                    x1 = hx - hole_gap / 2
+                    x2 = hx + hole_gap / 2
+                    y0 = hy
+
+                    out.append(
+                        f'<line x1="{x1:.1f}" y1="{y0:.1f}" x2="{x2:.1f}" y2="{y0:.1f}" '
+                        f'style="stroke:black;stroke-width:{stroke_w};stroke-linecap:round" />'
+                    )
+                    out.append(
+                        f'<circle cx="{x1:.1f}" cy="{y0:.1f}" r="{hole_r:.1f}" '
+                        f'style="fill:white;stroke:black;stroke-width:{stroke_w}" />'
+                    )
+                    out.append(
+                        f'<circle cx="{x2:.1f}" cy="{y0:.1f}" r="{hole_r:.1f}" '
+                        f'style="fill:white;stroke:black;stroke-width:{stroke_w}" />'
+                    )
+
+                else:
+                    # TOP edge -> rotate symbol 90° (vertical dumbbell)
+                    hx = x + 14
+                    hy = y + h * 0.78
+
+                    y1 = hy - hole_gap / 2
+                    y2 = hy + hole_gap / 2
+                    x0 = hx
+
+                    out.append(
+                        f'<line x1="{x0:.1f}" y1="{y1:.1f}" x2="{x0:.1f}" y2="{y2:.1f}" '
+                        f'style="stroke:black;stroke-width:{stroke_w};stroke-linecap:round" />'
+                    )
+                    out.append(
+                        f'<circle cx="{x0:.1f}" cy="{y1:.1f}" r="{hole_r:.1f}" '
+                        f'style="fill:white;stroke:black;stroke-width:{stroke_w}" />'
+                    )
+                    out.append(
+                        f'<circle cx="{x0:.1f}" cy="{y2:.1f}" r="{hole_r:.1f}" '
+                        f'style="fill:white;stroke:black;stroke-width:{stroke_w}" />'
+                    )
+
+
+
+
 
 
             # Name label (bottom-right)
@@ -1704,6 +1853,7 @@ TEMPLATE = """
                             <th>Qty</th>
                             <th>Can rotate</th>
                             <th>Hinge holes</th>
+                            <th>Hinge edge</th>
                             <th>Grain group</th>
                             <th>Grain order</th>
                         </tr>
@@ -1749,12 +1899,20 @@ TEMPLATE = """
                         </td>
 
                         <td>
+                            <select name="hinge_edge">
+                                <option value="vertical" {% if row.hinge_edge == 'vertical' %}selected{% endif %}>Vertical</option>
+                                <option value="top"      {% if row.hinge_edge == 'top' %}selected{% endif %}>Top</option>
+                            </select>
+                        </td>
+
+                        <td>
                             <input type="text" name="grain_group" value="{{ row.grain_group }}">
                         </td>
                         <td>
                             <input type="number" name="grain_order" value="{{ row.grain_order or '0' }}">
                         </td>
                     </tr>
+                    
 
                     {% endfor %}
                 </tbody>
@@ -1887,6 +2045,12 @@ function addRow() {
             '<input type="checkbox" name="hinge_holes_' + index + '" value="1">' +
             '<input type="hidden"  name="hinge_holes_' + index + '" value="0">' +
         '</td>' +
+        '<td>' +
+            '<select name="hinge_edge">' +
+                '<option value="vertical">Vertical</option>' +
+                '<option value="top">Top</option>' +
+            '</select>' +
+        '</td>' +
         '<td><input type="text" name="grain_group"></td>' +
         '<td><input type="number" name="grain_order" value="0"></td>';
 
@@ -1976,6 +2140,7 @@ function importPartsList(ev) {
                 tr.querySelector('select[name="can_rotate"]').value   = (row.can_rotate || "no");
                 tr.querySelector('input[name="grain_group"]').value   = row.grain_group || "";
                 tr.querySelector('input[name="grain_order"]').value   = row.grain_order || "0";
+                tr.querySelector('select[name="hinge_edge"]').value = (row.hinge_edge || "vertical");
             });
 
             if (!arr.length) {
@@ -2621,11 +2786,13 @@ def index():
             "band_len": "0",
             "band_wid": "0",
             "can_rotate": "no",
+            "hinge_edge": "vertical",  # ✅
             "grain_group": "",
             "grain_order": "0",
             "quantity": "1",
         },
     ]
+
     # ... keep the rest of your index() code exactly as it was ...
 
     ctx = {
