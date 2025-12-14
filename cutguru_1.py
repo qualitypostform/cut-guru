@@ -150,20 +150,13 @@ def kerf_board_dims(board_w: float, board_h: float, kerf: float) -> Tuple[float,
 # ============================================================
 
 class MaxRects:
-    """
-    MaxRects with:
-    - Best Short Side Fit
-    - Supports rotated or unrotated placement
-    - Free-rectangle pruning (removes contained rects)
-    - Guaranteed non-overlap (proper split geometry)
-    """
-
-    def __init__(self, width: float, height: float):
+    def __init__(self, width: float, height: float, prefer_long_offcuts: bool = True):
         self.bin_width = width
         self.bin_height = height
-        self.free_rects: List[FreeRect] = [
-            FreeRect(0, 0, width, height)
-        ]
+        self.prefer_long_offcuts = prefer_long_offcuts
+        self.free_rects: List[FreeRect] = [FreeRect(0, 0, width, height)]
+
+
 
     # ------------------------------------------------------------
     # Split one free rectangle around a placed block
@@ -347,13 +340,17 @@ class MaxRects:
                     short_side = min(leftover_w, leftover_h)
                     long_side  = max(leftover_w, leftover_h)
 
+                    offcut_term = -leftover_h if self.prefer_long_offcuts else +leftover_h
+
                     score = (
-                        short_side,        # pack efficiency first
-                        long_side,         # then next best fit
-                        skinny_penalty,    # only then avoid skinny strips
-                        -leftover_h,       # *last* tie-break: prefer long offcuts
+                        offcut_term,       # ✅ this is the “auto mode” hook
+                        short_side,
+                        long_side,
+                        skinny_penalty,
                         fr.y, fr.x
                     )
+
+
 
 
 
@@ -566,6 +563,18 @@ def nest_with_maxrects(board_w: float,
     # Expand quantities
     expanded = expand_parts(parts)
 
+    # Decide automatically whether we prefer long offcuts or tighter packing.
+    # If most parts are non-rotating and similar width, we prefer filling the sheet (not preserving long strips).
+    normals_only = [p for p in expanded if not p.grain_group]
+    nonrot = [p for p in normals_only if not p.can_rotate]
+
+    prefer_long_offcuts = True
+    if nonrot and len(nonrot) >= max(3, int(0.7 * len(normals_only))):
+        widths = [p.width for p in nonrot]
+        if max(widths) - min(widths) <= 3.0:  # mm tolerance
+            prefer_long_offcuts = False
+
+
     # Optional randomisation of base list (before grouping)
     if shuffle_mode in (1, 2):
         import random
@@ -620,7 +629,7 @@ def nest_with_maxrects(board_w: float,
         # Need new board?
         if not placed:
             b = BoardLayout(board_w, board_h)
-            b._maxr = MaxRects(usable_w, usable_h)
+            b._maxr = MaxRects(usable_w, usable_h, prefer_long_offcuts=prefer_long_offcuts)
             boards.append(b)
             bi = len(boards) - 1
 
@@ -754,7 +763,7 @@ def nest_with_inventory(board_stock: List[BoardStock],
         for _ in range(bs.quantity):
             b = BoardLayout(width=bs.width, height=bs.length)
             usable_w, usable_h = kerf_board_dims(bs.width, bs.length, kerf)
-            b._maxr = MaxRects(usable_w, usable_h)
+            b._maxr = MaxRects(usable_w, usable_h, prefer_long_offcuts=True)
             boards.append(b)
 
     if not boards:
