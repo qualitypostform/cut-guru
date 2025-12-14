@@ -2518,6 +2518,24 @@ document.addEventListener('DOMContentLoaded', function() {
         const row = target.closest('tr');
         if (!row) return;
 
+        // ✅ If Enter pressed in the later columns → jump to NEW row
+        const isHingeCheckbox = (target.type === "checkbox" && (target.name || "").startsWith("hinge_holes_"));
+
+        const endColumn =
+            target.name === "can_rotate" ||
+            target.name === "hinge_edge" ||
+            target.name === "grain_group" ||
+            target.name === "grain_order" ||
+            isHingeCheckbox;
+
+        if (endColumn) {
+            e.preventDefault();
+            const newRow = addRow();
+            const newLen = newRow.querySelector('input[name="final_length"]');
+            if (newLen) { newLen.focus(); newLen.select(); }
+            return;
+        }
+
         const nameInput  = row.querySelector('input[name="part_name"]');
         const lenInput   = row.querySelector('input[name="final_length"]');
         const bandLen    = row.querySelector('input[name="band_len"]');
@@ -2529,62 +2547,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // If we're on QTY: enforce non-empty length & width first
         if (target === qtyInput) {
-            if (lenInput && !lenInput.value.trim()) {
-                lenInput.focus();
-                lenInput.select();
-                return;
-            }
-            if (widInput && !widInput.value.trim()) {
-                widInput.focus();
-                widInput.select();
-                return;
-            }
+            if (lenInput && !lenInput.value.trim()) { lenInput.focus(); lenInput.select(); return; }
+            if (widInput && !widInput.value.trim()) { widInput.focus(); widInput.select(); return; }
 
-            // Length & width are filled → add new row and go to its Final length
             const newRow = addRow();
             const newLen = newRow.querySelector('input[name="final_length"]');
-            if (newLen) {
-                newLen.focus();
-                newLen.select();
-            }
+            if (newLen) { newLen.focus(); newLen.select(); }
             return;
         }
 
-        // Name → Final length
-        if (target === nameInput && lenInput) {
-            lenInput.focus();
-            lenInput.select();
-            return;
-        }
-
-        // Final length → Band len
-        if (target === lenInput && bandLen) {
-            bandLen.focus();
-            bandLen.select();
-            return;
-        }
-
-        // Band len → Final width
-        if (target === bandLen && widInput) {
-            widInput.focus();
-            widInput.select();
-            return;
-        }
-
-        // Final width → Band wid
-        if (target === widInput && bandWid) {
-            bandWid.focus();
-            bandWid.select();
-            return;
-        }
-
-        // Band wid → Qty
-        if (target === bandWid && qtyInput) {
-            qtyInput.focus();
-            qtyInput.select();
-            return;
-        }
+        if (target === nameInput && lenInput) { lenInput.focus(); lenInput.select(); return; }
+        if (target === lenInput && bandLen)   { bandLen.focus(); bandLen.select(); return; }
+        if (target === bandLen && widInput)   { widInput.focus(); widInput.select(); return; }
+        if (target === widInput && bandWid)   { bandWid.focus(); bandWid.select(); return; }
+        if (target === bandWid && qtyInput)   { qtyInput.focus(); qtyInput.select(); return; }
     });
+
 
     // ENTER navigation in BOARD INVENTORY table
     document.addEventListener('keydown', function(e) {
