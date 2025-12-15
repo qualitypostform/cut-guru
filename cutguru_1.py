@@ -1718,6 +1718,9 @@ TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <title>Cut Guru - MaxRects</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32"
+          href="{{ url_for('static', filename='favicon-32.png') }}">
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .row { display: flex; gap: 20px; flex-wrap: wrap; }
