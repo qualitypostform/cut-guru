@@ -150,11 +150,13 @@ def kerf_board_dims(board_w: float, board_h: float, kerf: float) -> Tuple[float,
 # ============================================================
 
 class MaxRects:
-    def __init__(self, width: float, height: float, prefer_long_offcuts: bool = True):
+    def __init__(self, width: float, height: float, mode: str = "panel", prefer_long_offcuts: bool = True):
         self.bin_width = width
         self.bin_height = height
+        self.mode = (mode or "panel").strip().lower()   # "panel" or "router"
         self.prefer_long_offcuts = prefer_long_offcuts
         self.free_rects: List[FreeRect] = [FreeRect(0, 0, width, height)]
+
 
 
 
@@ -201,21 +203,27 @@ class MaxRects:
 
             return new_rects
 
-        # ---- TOP-LEFT placement: prefer VERTICAL-FIRST split ----
+        # ---- TOP-LEFT placement: split depends on mode ----
         new_rects = []
 
         right_w = fr.width - w
         bottom_h = fr.height - h
 
-        # 1) Right remainder: FULL height (this is the important one)
-        if right_w > 0:
-            new_rects.append(FreeRect(fr.x + w, fr.y, right_w, fr.height))
-
-        # 2) Bottom remainder under the placed part (only the placed width)
-        if bottom_h > 0:
-            new_rects.append(FreeRect(fr.x, fr.y + h, w, bottom_h))
+        if self.mode == "router":
+            # HORIZONTAL-FIRST: keep FULL width on the bottom remainder
+            if bottom_h > 0:
+                new_rects.append(FreeRect(fr.x, fr.y + h, fr.width, bottom_h))
+            if right_w > 0:
+                new_rects.append(FreeRect(fr.x + w, fr.y, right_w, h))
+        else:
+            # PANEL (your current behaviour): VERTICAL-FIRST
+            if right_w > 0:
+                new_rects.append(FreeRect(fr.x + w, fr.y, right_w, fr.height))
+            if bottom_h > 0:
+                new_rects.append(FreeRect(fr.x, fr.y + h, w, bottom_h))
 
         return new_rects
+
 
 
 
@@ -550,7 +558,10 @@ def nest_with_maxrects(board_w: float,
                        board_h: float,
                        parts: List[Part],
                        kerf: float,
-                       shuffle_mode: int = 0):
+                       shuffle_mode: int = 0,
+                       calc_mode: str = "panel"):
+
+                            
     """
     Single MaxRects run on an infinite supply of identical boards.
 
@@ -629,7 +640,11 @@ def nest_with_maxrects(board_w: float,
         # Need new board?
         if not placed:
             b = BoardLayout(board_w, board_h)
-            b._maxr = MaxRects(usable_w, usable_h, prefer_long_offcuts=prefer_long_offcuts)
+            b._maxr = MaxRects(
+                usable_w, usable_h,
+                mode=calc_mode,                     # <-- comes from index() (panel/router)
+                prefer_long_offcuts=prefer_long_offcuts
+            )
             boards.append(b)
             bi = len(boards) - 1
 
@@ -656,7 +671,9 @@ def best_layout_global(board_length: float,
                        board_width: float,
                        parts: List[Part],
                        kerf: float,
-                       tries_per_orientation: int = 16):
+                       tries_per_orientation: int = 16,
+                       calc_mode: str = "panel"):
+
     """
     Try multiple randomised layouts on boards with the
     given length/width (no board rotation), and keep
@@ -685,7 +702,9 @@ def best_layout_global(board_length: float,
             parts,
             kerf,
             shuffle_mode=mode,
+            calc_mode=calc_mode,   # ✅ add this
         )
+
 
 
         # squeeze onto earlier boards if possible
@@ -1436,7 +1455,7 @@ def generate_svg_layout(boards, board_length, board_width, parts_file_name=None)
 
             # --- HINGE MARK (bold), snapped away from dimension text ---
            
-            if getattr(p, "has_hinge_holes", False) and (p.band_width_sides == 2 and p.band_length_sides == 2):
+            if getattr(p, "has_hinge_holes", False):
 
                 hinge_edge = (getattr(p, "hinge_edge", "vertical") or "vertical").strip().lower()
                 if hinge_edge not in ("vertical", "top"):
@@ -1993,9 +2012,16 @@ TEMPLATE = """
         </div>  <!-- close Parts list .card -->
     </div>      <!-- close .row -->
 
+    <button type="submit" name="calc_mode" value="panel"
+            style="padding:10px 20px; font-size:16px;">
+      Calculate layout
+    </button>
 
-    <button type="submit" style="padding:10px 20px; font-size:16px;">Calculate layout</button>
-</form>
+    <button type="submit" name="calc_mode" value="router"
+            style="padding:10px 20px; font-size:16px; margin-left:10px;">
+      Calculate (Router nesting)
+    </button>
+    </form>
 
 {% if errors %}
 <div class="card error">
@@ -2797,6 +2823,7 @@ def index():
 
     if request.method == "POST":
         try:
+            calc_mode = request.form.get("calc_mode", "panel")  # panel or router
             board_length = float(request.form.get("board_length", "0"))
             board_width = float(request.form.get("board_width", "0"))
             edge_thickness = float(request.form.get("edge_thickness", "1"))
@@ -2838,8 +2865,10 @@ def index():
                         board_width,
                         parts,
                         kerf,
-                        tries_per_orientation=16,   # you can increase to 32/48 if still fast enough
+                        tries_per_orientation=16,
+                        calc_mode=calc_mode,   # ✅ add this
                     )
+
 
 
                 # NEW: remove any completely unused boards and renumber them
