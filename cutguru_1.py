@@ -615,6 +615,9 @@ def nest_with_maxrects(board_w: float,
     elif shuffle_mode == 2:
         # bias towards taller strips first
         items.sort(key=lambda it: it.height, reverse=True)
+    elif shuffle_mode == 3:
+        # NEW: width descending (for tighter "strip" style packing)
+        items.sort(key=lambda it: it.width, reverse=True)
 
     # Compute interior usable space (kerf on outer edges)
     usable_w, usable_h = kerf_board_dims(board_w, board_h, kerf)
@@ -694,7 +697,7 @@ def best_layout_global(board_length: float,
     bw, bl = board_width, board_length
 
     for t in range(tries_per_orientation):
-        mode = t % 3  # 0,1,2 – same shuffle logic as before
+        mode = t % 4  # 0,1,2,3 (adds width-desc)
 
         boards, used_area, waste_area = nest_with_maxrects(
             bw,
