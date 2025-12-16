@@ -4,6 +4,7 @@
 # CHUNK 1/7: Imports, Data Classes, Kerf Helpers
 # ---------------------------------------------------------------
 
+from ortools.sat.python import cp_model
 from datetime import datetime
 import pytz
 from dataclasses import dataclass, field
@@ -742,6 +743,326 @@ def best_layout_global(board_length: float,
 
     return best_boards, best_used, best_waste
 
+# ============================================================
+#  CP-SAT "ULTIMATE" NESTING (time-limited)
+# ============================================================
+
+def nest_with_cpsat(board_w: float,
+                    board_h: float,
+                    parts: List[Part],
+                    kerf: float,
+                    time_limit_seconds: float = 30.0):
+    """
+    CP-SAT rectangle packing with optional rotation + your grain composites.
+    We pack EXPANDED sizes (w+kerf, h+kerf) just like MaxRects does,
+    and store CUT coords/sizes for SVG the same way you do now.
+
+    Returns (boards, used_area, waste_area)
+    """
+
+    # Expand quantities
+    expanded = expand_parts(parts)
+
+    # Separate grain groups => composites (fixed orientation)
+    grain_map = {}
+    normals = []
+    for p in expanded:
+        if p.grain_group:
+            grain_map.setdefault(p.grain_group, []).append(p)
+        else:
+            normals.append(p)
+
+    composites = [make_grain_composite(v, kerf) for v in grain_map.values()]
+
+    # Build "items" list for solver (composites + normals)
+    # Each item has:
+    #   - base cut dims (cw, ch)
+    #   - expanded dims (ew, eh) = (cw+kerf, ch+kerf)
+    #   - can_rotate
+    #   - payload: either ("comp", GrainComposite) or ("part", Part)
+    items = []
+    for comp in composites:
+        cw, ch = comp.width, comp.height
+        ew, eh = kerf_expand(cw, ch, kerf)
+        items.append({
+            "cw": int(round(cw)),
+            "ch": int(round(ch)),
+            "ew": int(round(ew)),
+            "eh": int(round(eh)),
+            "can_rotate": False,
+            "payload": ("comp", comp),
+        })
+    for p in normals:
+        cw, ch = p.width, p.height
+        ew, eh = kerf_expand(cw, ch, kerf)
+        items.append({
+            "cw": int(round(cw)),
+            "ch": int(round(ch)),
+            "ew": int(round(ew)),
+            "eh": int(round(eh)),
+            "can_rotate": bool(p.can_rotate),
+            "payload": ("part", p),
+        })
+
+    # Sort items big-first (helps CP-SAT a lot)
+    items.sort(key=lambda it: it["ew"] * it["eh"], reverse=True)
+
+    usable_w, usable_h = kerf_board_dims(board_w, board_h, kerf)
+    BW = int(round(usable_w))
+    BH = int(round(usable_h))
+
+    n = len(items)
+    total_part_area = sum(p.width * p.height for p in expanded)
+
+    # ---- baseline board count from your fast engine ----
+    # (this tells CP-SAT where to start)
+    base_boards, _, _ = nest_with_maxrects(board_w, board_h, parts, kerf, shuffle_mode=0)
+    K0 = len(base_boards)
+
+    def try_pack_with_K(K: int):
+        model = cp_model.CpModel()
+
+        # Decision vars
+        x = []
+        y = []
+        r = []
+        w = []
+        h = []
+        pres = [[None] * K for _ in range(n)]
+        board_used = []
+
+        for i, it in enumerate(items):
+            x_i = model.NewIntVar(0, BW, f"x_{i}")
+            y_i = model.NewIntVar(0, BH, f"y_{i}")
+
+            # rotation boolean (or fixed False)
+            if it["can_rotate"]:
+                r_i = model.NewBoolVar(f"r_{i}")
+            else:
+                r_i = model.NewConstant(0)
+
+            # effective expanded width/height depending on rotation
+            ew0, eh0 = it["ew"], it["eh"]
+            # w = ew0 + (eh0-ew0)*r
+            # h = eh0 + (ew0-eh0)*r
+            w_i = model.NewIntVar(min(ew0, eh0), max(ew0, eh0), f"w_{i}")
+            h_i = model.NewIntVar(min(ew0, eh0), max(ew0, eh0), f"h_{i}")
+            model.Add(w_i == ew0 + (eh0 - ew0) * r_i)
+            model.Add(h_i == eh0 + (ew0 - eh0) * r_i)
+
+            # Must fit in board bounds
+            model.Add(x_i + w_i <= BW)
+            model.Add(y_i + h_i <= BH)
+
+            x.append(x_i); y.append(y_i); r.append(r_i); w.append(w_i); h.append(h_i)
+
+            # Assign each item to exactly one board via optional intervals
+            p_row = []
+            for b in range(K):
+                p_ib = model.NewBoolVar(f"p_{i}_{b}")
+                p_row.append(p_ib)
+                pres[i][b] = p_ib
+            model.Add(sum(p_row) == 1)
+
+        # board_used flags
+        for b in range(K):
+            ub = model.NewBoolVar(f"board_used_{b}")
+            board_used.append(ub)
+            # if any item is on board b => board_used[b] = 1
+            for i in range(n):
+                model.Add(ub >= pres[i][b])
+
+        # NoOverlap2D per board using optional intervals
+        for b in range(K):
+            x_intervals = []
+            y_intervals = []
+            for i in range(n):
+                p_ib = pres[i][b]
+                xi, yi, wi, hi = x[i], y[i], w[i], h[i]
+
+                x_end = model.NewIntVar(0, BW, f"x_end_{i}_{b}")
+                y_end = model.NewIntVar(0, BH, f"y_end_{i}_{b}")
+
+                # present => end = start + size
+                model.Add(x_end == xi + wi).OnlyEnforceIf(p_ib)
+                model.Add(y_end == yi + hi).OnlyEnforceIf(p_ib)
+
+                # not present => pin end to 0
+                model.Add(x_end == 0).OnlyEnforceIf(p_ib.Not())
+                model.Add(y_end == 0).OnlyEnforceIf(p_ib.Not())
+
+                xint = model.NewOptionalIntervalVar(xi, wi, x_end, p_ib, f"xint_{i}_{b}")
+                yint = model.NewOptionalIntervalVar(yi, hi, y_end, p_ib, f"yint_{i}_{b}")
+
+                x_intervals.append(xint)
+                y_intervals.append(yint)
+
+            model.AddNoOverlap2D(x_intervals, y_intervals)
+
+
+
+        # ----------------------------
+        # Objective (lexicographic-ish):
+        #   1) minimize boards used
+        #   2) then pack toward top-left (0,0) to avoid offcuts near the 2850 end
+        # ----------------------------
+        # ----------------------------
+        # Pack "like reading a book" (bias to top-left):
+        #  1) minimize boards used
+        #  2) minimize rightmost used edge (keeps things stacked LEFT)
+        #  3) minimize lowest used edge (keeps things toward TOP)
+        #  4) tie-breaker: pull all parts toward origin
+        # ----------------------------
+        max_x = []
+        max_y = []
+
+        for b in range(K):
+            end_x_list = []
+            end_y_list = []
+            for i in range(n):
+                p_ib = pres[i][b]
+
+                endx = model.NewIntVar(0, BW, f"endx_{i}_{b}")
+                endy = model.NewIntVar(0, BH, f"endy_{i}_{b}")
+
+                model.Add(endx == x[i] + w[i]).OnlyEnforceIf(p_ib)
+                model.Add(endy == y[i] + h[i]).OnlyEnforceIf(p_ib)
+                model.Add(endx == 0).OnlyEnforceIf(p_ib.Not())
+                model.Add(endy == 0).OnlyEnforceIf(p_ib.Not())
+
+                end_x_list.append(endx)
+                end_y_list.append(endy)
+
+            bx = model.NewIntVar(0, BW, f"max_x_{b}")
+            by = model.NewIntVar(0, BH, f"max_y_{b}")
+            model.AddMaxEquality(bx, end_x_list)
+            model.AddMaxEquality(by, end_y_list)
+
+            max_x.append(bx)
+            max_y.append(by)
+
+        W1 = 10_000_000
+        W2 = 10_000
+        W3 = 1
+
+        model.Minimize(
+            W1 * sum(board_used) +
+            W2 * sum(max_x) +
+            W2 * sum(max_y) +
+            W3 * (sum(x) + sum(y))
+        )
+
+
+
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = float(time_limit_seconds)
+        solver.parameters.num_search_workers = 8  # parallel
+
+        status = solver.Solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+
+        # Build BoardLayout outputs compatible with your SVG/report pipeline
+        boards: List[BoardLayout] = []
+        for _ in range(K):
+            boards.append(BoardLayout(board_w, board_h))
+            boards[-1]._maxr = None  # not used here
+
+        for i, it in enumerate(items):
+            # which board?
+            b_idx = None
+            for b in range(K):
+                if solver.Value(pres[i][b]) == 1:
+                    b_idx = b
+                    break
+
+            xi = float(solver.Value(x[i]))
+            yi = float(solver.Value(y[i]))
+            rot = bool(solver.Value(r[i])) if it["can_rotate"] else False
+
+
+            payload_type, payload_obj = it["payload"]
+
+            if payload_type == "comp":
+                comp: GrainComposite = payload_obj
+                # Place composite at (x,y) then explode into subparts like your place_composite()
+                # NOTE: composite itself is not rotated.
+                curr_y = yi
+                for child in comp.subparts:
+                    cx = xi + (comp.width - child.width) / 2.0
+                    cy = curr_y
+                    boards[b_idx].parts.append(
+                        PlacedPart(
+                            name=child.name,
+                            x=cx, y=cy,
+                            width=child.width,
+                            height=child.height,
+                            rotated=False,
+                            board_index=b_idx,
+                            final_width=child.final_width,
+                            final_length=child.final_length,
+                            band_width_sides=child.band_width_sides,
+                            band_length_sides=child.band_length_sides,
+                            can_rotate=child.can_rotate,
+                            grain_group=child.grain_group,
+                            grain_order=child.grain_order,
+                            has_hinge_holes=child.has_hinge_holes,
+                            hinge_edge=child.hinge_edge,
+                        )
+                    )
+                    curr_y += child.height + kerf
+
+            else:
+                p: Part = payload_obj
+                # Record CUT size but apply rotation like place_normal_part()
+                if rot:
+                    pw, ph = p.height, p.width
+                else:
+                    pw, ph = p.width, p.height
+
+                boards[b_idx].parts.append(
+                    PlacedPart(
+                        name=p.name,
+                        x=xi, y=yi,
+                        width=pw, height=ph,
+                        rotated=rot,
+                        board_index=b_idx,
+                        final_width=p.final_width,
+                        final_length=p.final_length,
+                        band_width_sides=p.band_width_sides,
+                        band_length_sides=p.band_length_sides,
+                        can_rotate=p.can_rotate,
+                        grain_group=p.grain_group,
+                        grain_order=p.grain_order,
+                        has_hinge_holes=p.has_hinge_holes,
+                        hinge_edge=p.hinge_edge,
+                    )
+                )
+
+        # Drop unused boards (presentation)
+        boards = filter_used_boards(boards)
+
+        # Free rects not computed in CP-SAT mode (leave empty)
+        for b in boards:
+            b.free_rects = []
+
+        waste = len(boards) * board_w * board_h - total_part_area
+        return boards, total_part_area, waste
+
+    # ---- Try to beat baseline board count (K0-1, K0-2, ...) then fall back ----
+    # Give each K attempt a slice of the time. Simple approach: reuse full time per try for now.
+    for K in range(max(1, K0 - 1), 0, -1):
+        res = try_pack_with_K(K)
+        if res is not None:
+            return res
+
+    # Fallback to baseline count if we couldn't pack into fewer boards
+    res = try_pack_with_K(K0)
+    if res is not None:
+        return res
+
+    # Last resort: your existing engine
+    return nest_with_maxrects(board_w, board_h, parts, kerf, shuffle_mode=0)
 
 
 # ============================================================
@@ -2027,6 +2348,12 @@ TEMPLATE = """
             style="padding:10px 20px; font-size:16px; margin-left:10px;">
       Calculate (Router nesting)
     </button>
+
+    <button type="submit" name="calc_mode" value="ultimate"
+            style="padding:10px 20px; font-size:16px; margin-left:10px;">
+      Calculate (Ultimate CP-SAT)
+    </button>
+    
     </form>
 
 {% if errors %}
@@ -2853,29 +3180,31 @@ def index():
             inv_boards, inv_rows, inv_errors = parse_board_inventory_from_form(request.form)
             ctx["board_inv_rows"] = inv_rows
             ctx["errors"].extend(inv_errors)
+ 
 
             if not ctx["errors"] and parts:
                 # ---------- NESTING ----------
                 if inv_boards:
-                    # Use finite inventory of (possibly different) boards
                     boards, used_area, waste_area = nest_with_inventory(
-                        inv_boards,
-                        parts,
-                        kerf,
+                        inv_boards, parts, kerf
                     )
                 else:
-                    # Infinite boards of a single size – explore multiple
-                    # randomised layouts in both orientations and keep the best.
-                    boards, used_area, waste_area = best_layout_global(
-                        board_length,
-                        board_width,
-                        parts,
-                        kerf,
-                        tries_per_orientation=16,
-                        calc_mode=calc_mode,   # ✅ add this
-                    )
-
-
+                    if calc_mode == "ultimate":
+                        boards, used_area, waste_area = nest_with_cpsat(
+                            board_width,    # board_w
+                            board_length,   # board_h
+                            parts,
+                            kerf,
+                            time_limit_seconds=30.0,
+                        )
+                    else:
+                        boards, used_area, waste_area = best_layout_global(
+                            board_length,
+                            board_width,
+                            parts,
+                            kerf,
+                            tries_per_orientation=16,
+                        )
 
                 # NEW: remove any completely unused boards and renumber them
                 boards = filter_used_boards(boards)
@@ -2883,8 +3212,8 @@ def index():
                 # ---------- REPORT + SVG ----------
                 report = generate_text_report(
                     boards,
-                    board_width,   # width (for info only)
-                    board_length,  # length (for info only)
+                    board_width,
+                    board_length,
                     used_area,
                     waste_area,
                     kerf,
@@ -2894,11 +3223,13 @@ def index():
                     boards,
                     board_length,
                     board_width,
-                    ctx.get("parts_file_name")  # <-- this bit
+                    ctx.get("parts_file_name"),
                 )
 
                 ctx["report"] = report
                 ctx["svg"] = svg
+
+
 
         except Exception as e:
             ctx["errors"].append(str(e))
